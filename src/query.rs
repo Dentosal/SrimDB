@@ -1,13 +1,24 @@
+use std::fmt;
+use std::collections::HashMap;
+
 use TableName;
 use FieldName;
+use FunctionName;
+use TableField;
 use Row;
 use QueryError;
 use DataDB;
+use Value;
+use TypeError;
+use function::{Function, FunctionCall};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Query {
-    /// Multiset Union
+    /// Table from db
     Table(TableName),
+
+    /// Single column, single row "Table" from a function call
+    FromValue(TableField, FunctionCall),
 
     /// Multiset Union
     Union(Box<Query>, Box<Query>),
@@ -35,19 +46,55 @@ impl Query {
         use Query::*;
         match self {
             Table(name) => QueryResult::from_db_table(&db, name.clone()),
+            FromValue(field, fc) => {
+                let fd = db.function_dict();
+                let value = (*fc).resolve_args(&|_qf: &QueryField| {
+                    panic!("FromValue references a field"); // TODO: just return QueryError?
+                })?.apply(&fd)?;
+
+                Ok(QueryResult::new(vec![QueryField::new(field.name())], vec![Row::new(vec![value])]))
+            },
             Project(fields, subquery) => {
                 subquery.execute(&db)?.project(fields)
-            }
+            },
+            Select(condition, subquery) => {
+                let fd = db.function_dict();
+                subquery.execute(&db)?.filter(&fd, condition)
+            },
             _ => unimplemented!()
         }
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Condition {
-    True,
-    False,
+    Value(Value),
+    QueryField(QueryField),
+    FunctionCall(FunctionCall),
 }
+impl Condition {
+    pub(crate) fn test(&self,
+        function_dict: &HashMap<FunctionName, Function>,
+        resolve: &Fn(&QueryField) -> Result<Value, QueryError>,
+    ) -> Result<bool, QueryError> {
+        match self {
+            Condition::Value(v) => match v {
+                Value::Boolean(b) => Ok(*b),
+                _ => Err(QueryError::TypeError(TypeError::NotBoolean))
+            },
+            Condition::QueryField(qf) => {
+                Condition::Value(resolve(qf)?).test(function_dict, resolve)
+            },
+            Condition::FunctionCall(fc) => {
+                let value = (*fc).resolve_args(&|qf: &QueryField| {
+                    resolve(qf)
+                })?.apply(function_dict)?;
+                Condition::Value(value).test(function_dict, resolve)
+            },
+        }
+    }
+}
+
 
 #[derive(Debug, Clone)]
 pub struct QueryField {
@@ -68,7 +115,16 @@ impl QueryField {
         self.table.is_none()
     }
 }
-
+impl fmt::Display for QueryField {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if let Some(table) = self.table.clone() {
+            write!(f, "{}.{}", table, self.field)
+        }
+        else {
+            write!(f, "{}", self.field)
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct QueryResult {
@@ -84,7 +140,11 @@ impl QueryResult {
         self.rows.clone()
     }
 
-    pub(crate) fn from_db_table(db: &DataDB, table_name: TableName) -> Result<Self, QueryError> {
+    pub(super) fn new(fields: Vec<QueryField>, rows: Vec<Row>) -> Self {
+        Self { fields, rows }
+    }
+
+    pub(super) fn from_db_table(db: &DataDB, table_name: TableName) -> Result<Self, QueryError> {
         if let Some(table) = db.table(table_name.clone()) {
             let fields = table.fields().iter()
                 .map(|f| QueryField::new(f.name()).from_table(table_name.clone()))
@@ -101,7 +161,7 @@ impl QueryResult {
         let mut result = Vec::new();
         for (i, field) in self.fields.iter().enumerate() {
             if field.field == qf.field {
-                if qf.table == None || field.table == qf.table{
+                if qf.table == None || field.table == qf.table {
                     result.push(i);
                 }
             }
@@ -132,41 +192,30 @@ impl QueryResult {
             rows: self.rows.iter().map(|row| row.pick_columns(&result_columns)).collect()
         })
     }
+
+    pub(crate) fn filter(&self, function_dict: &HashMap<FunctionName, Function>, condition: &Condition) -> Result<QueryResult, QueryError> {
+
+        let mut rows: Vec<Row> = Vec::new();
+        for row in self.rows.clone() {
+            let ok = condition.test(function_dict, &|qf: &QueryField| {
+                let matching = self.match_field(&qf);
+                if matching.is_empty() {
+                    return Err(QueryError::NoSuchField(qf.clone()));
+                }
+                if matching.len() > 1 {
+                    return Err(QueryError::AmbiguousField(qf.clone()));
+                }
+
+                Ok(row.values()[matching[0]].clone())
+            })?;
+            if ok {
+                rows.push(row);
+            }
+        }
+
+        Ok(QueryResult {
+            fields: self.fields.clone(),
+            rows,
+        })
+    }
 }
-
-/*
-
-Companies
-id  name            city
-0   TuubaSoft       Redmond
-1   Microsoft       Redmond
-2   Google          Mountain View
-3   Oracle          Redwood City
-4   Apple           Silicon Valley
-
-Employees
-id  name            company
-0   Alice           TuubaSoft
-1   John            TuubaSoft
-2   Jack            Microsoft
-3   Rose            Microsoft
-4   Will            Apple
-5   Steve           Apple
-6   Bobby           Apple
-
-
-# Find out first names of all people working for Redmond companies
-
-SELECT Employees.name
-FROM (
-    SELECT Employees.name, Companies.city
-    FROM Employees
-    JOIN Companies
-        ON Companies.name == Employees.company
-    WHERE Companies.city == "Redmond"
-)
-
-JOIN Employees Companies
-ON eq(Employees::company, Companies::name)
-
-*/

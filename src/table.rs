@@ -57,8 +57,8 @@ pub struct TableField {
     kind: FieldKind
 }
 impl TableField {
-    pub fn new(name: &str, kind: FieldKind) -> Self {
-        Self { name: name.to_owned(), kind }
+    pub fn new(name: FieldName, kind: FieldKind) -> Self {
+        Self { name, kind }
     }
 
     pub fn name(&self) -> FieldName {
@@ -77,5 +77,8 @@ impl Row {
     }
     pub fn pick_columns(&self, columns: &Vec<usize>) -> Self {
         Self::new(columns.iter().map(|i| self.values[*i].clone()).collect())
+    }
+    pub fn values(&self) -> Vec<Value> {
+        self.values.clone()
     }
 }
