@@ -422,6 +422,24 @@ mod tests {
         assert_eq!(result.field_names(), vec!["company", "city"]);
     }
 
+    #[test]
+    fn test_distinct() {
+        let v1 = Query::FromValue(TableField::new("value".to_owned(), FieldKind::Integer(IntSize::N32, true)), Value::Signed(1));
+        let v2 = Query::FromValue(TableField::new("value".to_owned(), FieldKind::Integer(IntSize::N32, true)), Value::Signed(2));
+        let v3 = Query::Union(Box::new(v1.clone()), Box::new(v2.clone()));
+        let v4 = Query::Union(Box::new(v3.clone()), Box::new(v2.clone()));
+        let v5 = Query::Distinct(Box::new(v4.clone()));
+
+        let result = SrimDB::new().query(v3.clone()).unwrap();
+        assert_eq!(result.rows(), vec![Row::new(vec![Value::Signed(1)]), Row::new(vec![Value::Signed(2)])]);
+
+        let result = SrimDB::new().query(v4.clone()).unwrap();
+        assert_eq!(result.rows(), vec![Row::new(vec![Value::Signed(1)]), Row::new(vec![Value::Signed(2)]), Row::new(vec![Value::Signed(2)])]);
+
+        let result = SrimDB::new().query(v5.clone()).unwrap();
+        assert_eq!(result.rows(), vec![Row::new(vec![Value::Signed(1)]), Row::new(vec![Value::Signed(2)])]);
+    }
+
     // #[test]
     // fn test_join_rename() {
     //     // Find out names of all people working for companies in "City 2"

@@ -35,6 +35,9 @@ pub enum Query {
     /// Multiset Difference
     Difference(Box<Query>, Box<Query>),
 
+    /// Remove duplicates
+    Distinct(Box<Query>),
+
     /// Pick fields $0 in $1
     Project(Vec<QueryField>, Box<Query>),
 
@@ -75,6 +78,9 @@ impl Query {
                 let v1 = q1.execute(&db)?;
                 let v2 = q2.execute(&db)?;
                 v1.difference(&v2)
+            },
+            Distinct(subquery) => {
+                subquery.execute(&db)?.distinct()
             },
             Project(fields, subquery) => {
                 subquery.execute(&db)?.project(fields)
@@ -211,6 +217,16 @@ impl QueryResult {
         let mut rows: Vec<Row> = Vec::new();
         for row in self.rows() {
             if !other.rows.contains(&row) {
+                rows.push(row.clone());
+            }
+        }
+        Ok(QueryResult::new(self.fields.clone(), rows))
+    }
+
+    pub fn distinct(&self) -> Result<QueryResult, QueryError> {
+        let mut rows: Vec<Row> = Vec::new();
+        for row in self.rows() {
+            if !rows.contains(&row) {
                 rows.push(row.clone());
             }
         }
