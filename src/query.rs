@@ -83,7 +83,9 @@ impl Query {
                 let fd = db.function_dict();
                 subquery.execute(&db)?.filter(&fd, condition)
             },
-            _ => unimplemented!()
+            Rename(from, to, subquery) => {
+                subquery.execute(&db)?.rename(from, to)
+            },
         }
     }
 }
@@ -274,6 +276,24 @@ impl QueryResult {
         Ok(QueryResult {
             fields: self.fields.clone(),
             rows,
+        })
+    }
+
+    pub fn rename(&self, from: &QueryField, to: &FieldName) -> Result<QueryResult, QueryError> {
+        let matching = self.match_field(&from);
+        if matching.is_empty() {
+            return Err(QueryError::NoSuchField(from.clone()));
+        }
+        if matching.len() > 1 {
+            return Err(QueryError::AmbiguousField(from.clone()));
+        }
+
+        let mut fields = self.fields.clone();
+        fields[matching[0]] = QueryField::new(to.clone());
+
+        Ok(QueryResult {
+            fields,
+            rows: self.rows.clone(),
         })
     }
 }

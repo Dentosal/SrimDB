@@ -310,7 +310,6 @@ mod tests {
     fn test_simple_set_ops() {
         let v1 = Query::FromValue(TableField::new("value".to_owned(), FieldKind::Integer(IntSize::N32, true)), Value::Signed(1));
         let v2 = Query::FromValue(TableField::new("value".to_owned(), FieldKind::Integer(IntSize::N32, true)), Value::Signed(2));
-        let v3 = Query::FromValue(TableField::new("value".to_owned(), FieldKind::Integer(IntSize::N32, true)), Value::Signed(3));
 
         let result = SrimDB::new().query(v1.clone()).unwrap();
         assert_eq!(result.rows(), vec![Row::new(vec![Value::Signed(1)])]);
@@ -403,6 +402,24 @@ mod tests {
         ).unwrap();
 
         assert_eq!(result.rows().len(), 10);
+    }
+
+    #[test]
+    fn test_rename() {
+        let db = setup_simple_company_employee_scenario();
+
+        let company_names_and_cities = Query::Project(
+            vec![
+                QueryField::new("name".to_owned()),
+                QueryField::new("city".to_owned()),
+            ],
+            Box::new(Query::Table(
+                "Companies".to_owned()
+            ))
+        );
+
+        let result = db.query(Query::Rename(QueryField::new("name".to_owned()), "company".to_owned(), Box::new(company_names_and_cities))).unwrap();
+        assert_eq!(result.field_names(), vec!["company", "city"]);
     }
 
     // #[test]
