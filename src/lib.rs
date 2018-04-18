@@ -2,7 +2,6 @@
 #![deny(unused_must_use)]
 
 #![feature(match_default_bindings)]
-#![feature(i128_type)]
 #![feature(const_fn)]
 #![feature(decl_macro)]
 
@@ -41,6 +40,7 @@ pub enum TypeError {
 #[derive(Debug, Clone)]
 pub enum QueryError {
     IncompatibleTypes,
+    DifferentFields,
     TypeError(TypeError),
     NotEnoughArguments(usize),
     NoSuchTable(TableName),
@@ -293,7 +293,7 @@ mod tests {
     #[test]
     fn test_query_math() {
         let result = SrimDB::new().query(
-            Query::FromValue(
+            Query::FromFunctionCall(
                 TableField::new("sum".to_owned(), FieldKind::Integer(IntSize::N32, true)),
                 FunctionCall::new("add".to_owned(), vec![
                     Argument::Value(Value::Signed(2)),
@@ -304,6 +304,61 @@ mod tests {
         ).unwrap();
 
         assert_eq!(result.rows(), vec![Row::new(vec![Value::Signed(1)])]);
+    }
+
+    #[test]
+    fn test_simple_set_ops() {
+        let v1 = Query::FromValue(TableField::new("value".to_owned(), FieldKind::Integer(IntSize::N32, true)), Value::Signed(1));
+        let v2 = Query::FromValue(TableField::new("value".to_owned(), FieldKind::Integer(IntSize::N32, true)), Value::Signed(2));
+        let v3 = Query::FromValue(TableField::new("value".to_owned(), FieldKind::Integer(IntSize::N32, true)), Value::Signed(3));
+
+        let result = SrimDB::new().query(v1.clone()).unwrap();
+        assert_eq!(result.rows(), vec![Row::new(vec![Value::Signed(1)])]);
+
+        // Union
+        let result = SrimDB::new().query(Query::Union(Box::new(v1.clone()), Box::new(Query::Empty(vec!["value".to_owned()])))).unwrap();
+        assert_eq!(result.rows(), vec![Row::new(vec![Value::Signed(1)])]);
+
+        let result = SrimDB::new().query(Query::Union(Box::new(v1.clone()), Box::new(v2.clone()))).unwrap();
+        assert_eq!(result.rows(), vec![Row::new(vec![Value::Signed(1)]), Row::new(vec![Value::Signed(2)])]);
+
+        // Intersection
+        let result = SrimDB::new().query(Query::Intersection(Box::new(v1.clone()), Box::new(Query::Empty(vec!["value".to_owned()])))).unwrap();
+        assert_eq!(result.rows(), vec![]);
+
+        let result = SrimDB::new().query(Query::Intersection(Box::new(v1.clone()), Box::new(v1.clone()))).unwrap();
+        assert_eq!(result.rows(), vec![Row::new(vec![Value::Signed(1)])]);
+
+        let result = SrimDB::new().query(Query::Intersection(
+            Box::new(Query::Union(Box::new(v1.clone()), Box::new(v2.clone()))),
+            Box::new(v1.clone())
+        )).unwrap();
+        assert_eq!(result.rows(), vec![Row::new(vec![Value::Signed(1)])]);
+
+        let result = SrimDB::new().query(Query::Intersection(
+            Box::new(Query::Union(Box::new(v1.clone()), Box::new(v2.clone()))),
+            Box::new(Query::Union(Box::new(v1.clone()), Box::new(v2.clone()))),
+        )).unwrap();
+        assert_eq!(result.rows(), vec![Row::new(vec![Value::Signed(1)]), Row::new(vec![Value::Signed(2)])]);
+
+        // Difference
+        let result = SrimDB::new().query(Query::Difference(Box::new(v1.clone()), Box::new(Query::Empty(vec!["value".to_owned()])))).unwrap();
+        assert_eq!(result.rows(), vec![Row::new(vec![Value::Signed(1)])]);
+
+        let result = SrimDB::new().query(Query::Difference(Box::new(v1.clone()), Box::new(v1.clone()))).unwrap();
+        assert_eq!(result.rows(), vec![]);
+
+        let result = SrimDB::new().query(Query::Difference(
+            Box::new(Query::Union(Box::new(v1.clone()), Box::new(v2.clone()))),
+            Box::new(v1.clone())
+        )).unwrap();
+        assert_eq!(result.rows(), vec![Row::new(vec![Value::Signed(2)])]);
+
+        let result = SrimDB::new().query(Query::Difference(
+            Box::new(Query::Union(Box::new(v1.clone()), Box::new(v2.clone()))),
+            Box::new(Query::Union(Box::new(v1.clone()), Box::new(v2.clone()))),
+        )).unwrap();
+        assert_eq!(result.rows(), vec![]);
     }
 
     #[test]

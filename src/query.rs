@@ -14,11 +14,17 @@ use function::{Function, FunctionCall};
 
 #[derive(Debug, Clone)]
 pub enum Query {
+    /// Zero-row "Table" from field names
+    Empty(Vec<FieldName>),
+
     /// Table from db
     Table(TableName),
 
+    /// Single column, single row "Table" from a single value
+    FromValue(TableField, Value),
+
     /// Single column, single row "Table" from a function call
-    FromValue(TableField, FunctionCall),
+    FromFunctionCall(TableField, FunctionCall),
 
     /// Multiset Union
     Union(Box<Query>, Box<Query>),
@@ -28,9 +34,6 @@ pub enum Query {
 
     /// Multiset Difference
     Difference(Box<Query>, Box<Query>),
-
-    /// Multiset Product
-    Product(Box<Query>, Box<Query>),
 
     /// Pick fields $0 in $1
     Project(Vec<QueryField>, Box<Query>),
@@ -45,14 +48,33 @@ impl Query {
     pub(crate) fn execute(&self, db: &DataDB) -> Result<QueryResult, QueryError> {
         use Query::*;
         match self {
+            Empty(fields) => Ok(QueryResult::new(fields.clone().iter().map(|n| QueryField::new(n.clone())).collect(), Vec::new())),
             Table(name) => QueryResult::from_db_table(&db, name.clone()),
-            FromValue(field, fc) => {
+            FromValue(field, value) => {
+                Ok(QueryResult::new(vec![QueryField::new(field.name())], vec![Row::new(vec![value.clone()])]))
+            },
+            FromFunctionCall(field, fc) => {
                 let fd = db.function_dict();
                 let value = (*fc).resolve_args(&|_qf: &QueryField| {
-                    panic!("FromValue references a field"); // TODO: just return QueryError?
+                    panic!("FromFunctionCall references a field"); // TODO: just return QueryError?
                 })?.apply(&fd)?;
 
                 Ok(QueryResult::new(vec![QueryField::new(field.name())], vec![Row::new(vec![value])]))
+            },
+            Union(q1, q2) => {
+                let v1 = q1.execute(&db)?;
+                let v2 = q2.execute(&db)?;
+                v1.union(&v2)
+            },
+            Intersection(q1, q2) => {
+                let v1 = q1.execute(&db)?;
+                let v2 = q2.execute(&db)?;
+                v1.intersection(&v2)
+            },
+            Difference(q1, q2) => {
+                let v1 = q1.execute(&db)?;
+                let v2 = q2.execute(&db)?;
+                v1.difference(&v2)
             },
             Project(fields, subquery) => {
                 subquery.execute(&db)?.project(fields)
@@ -157,7 +179,43 @@ impl QueryResult {
         }
     }
 
-    pub(crate) fn match_field(&self, qf: &QueryField) -> Vec<usize> {
+    pub fn union(&self, other: &QueryResult) -> Result<QueryResult, QueryError> {
+        if self.field_names() != other.field_names() {
+            return Err(QueryError::DifferentFields);
+        }
+        let mut rows: Vec<Row> = Vec::new();
+        rows.extend(self.rows.clone());
+        rows.extend(other.rows.clone());
+        Ok(QueryResult::new(self.fields.clone(), rows))
+    }
+
+    pub fn intersection(&self, other: &QueryResult) -> Result<QueryResult, QueryError> {
+        if self.field_names() != other.field_names() {
+            return Err(QueryError::DifferentFields);
+        }
+        let mut rows: Vec<Row> = Vec::new();
+        for row in self.rows() {
+            if other.rows.contains(&row) {
+                rows.push(row.clone());
+            }
+        }
+        Ok(QueryResult::new(self.fields.clone(), rows))
+    }
+
+    pub fn difference(&self, other: &QueryResult) -> Result<QueryResult, QueryError> {
+        if self.field_names() != other.field_names() {
+            return Err(QueryError::DifferentFields);
+        }
+        let mut rows: Vec<Row> = Vec::new();
+        for row in self.rows() {
+            if !other.rows.contains(&row) {
+                rows.push(row.clone());
+            }
+        }
+        Ok(QueryResult::new(self.fields.clone(), rows))
+    }
+
+    pub fn match_field(&self, qf: &QueryField) -> Vec<usize> {
         let mut result = Vec::new();
         for (i, field) in self.fields.iter().enumerate() {
             if field.field == qf.field {
@@ -169,7 +227,7 @@ impl QueryResult {
         result
     }
 
-    pub(crate) fn project(&self, fields: &Vec<QueryField>) -> Result<QueryResult, QueryError> {
+    pub fn project(&self, fields: &Vec<QueryField>) -> Result<QueryResult, QueryError> {
         let mut result_fields: Vec<QueryField> = Vec::new();
         let mut result_columns: Vec<usize> = Vec::new();
 
@@ -193,7 +251,7 @@ impl QueryResult {
         })
     }
 
-    pub(crate) fn filter(&self, function_dict: &HashMap<FunctionName, Function>, condition: &Condition) -> Result<QueryResult, QueryError> {
+    pub fn filter(&self, function_dict: &HashMap<FunctionName, Function>, condition: &Condition) -> Result<QueryResult, QueryError> {
 
         let mut rows: Vec<Row> = Vec::new();
         for row in self.rows.clone() {
