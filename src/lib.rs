@@ -361,7 +361,7 @@ mod tests {
     }
 
     #[test]
-    fn test_select_condition() {
+    fn test_filter_condition() {
         let db = setup_simple_company_employee_scenario();
 
         let company_names_and_cities = Query::Project(
@@ -376,21 +376,21 @@ mod tests {
 
         // Discard all
         let result = db.query(
-            Query::Select(query::Condition::Value(Value::Boolean(false)), Box::new(company_names_and_cities.clone()))
+            Query::Filter(query::Condition::Value(Value::Boolean(false)), Box::new(company_names_and_cities.clone()))
         ).unwrap();
 
         assert_eq!(result.rows().len(), 0);
 
         // Select all
         let result = db.query(
-            Query::Select(query::Condition::Value(Value::Boolean(true)), Box::new(company_names_and_cities.clone()))
+            Query::Filter(query::Condition::Value(Value::Boolean(true)), Box::new(company_names_and_cities.clone()))
         ).unwrap();
 
         assert_eq!(result.rows().len(), 100);
 
         // Select "City 2"
         let result = db.query(
-            Query::Select(
+            Query::Filter(
                 query::Condition::FunctionCall(
                     FunctionCall::new("strict_eq".to_owned(), vec![
                         Argument::QueryField(QueryField::new("city".to_owned())),
@@ -440,28 +440,66 @@ mod tests {
         assert_eq!(result.rows(), vec![Row::new(vec![Value::Signed(1)]), Row::new(vec![Value::Signed(2)])]);
     }
 
-    // #[test]
-    // fn test_join_rename() {
-    //     // Find out names of all people working for companies in "City 2"
-    //     //
-    //     // SELECT Employees.name
-    //     // FROM (
-    //     //     SELECT Employees.name, Companies.city
-    //     //     FROM Employees
-    //     //     JOIN Companies
-    //     //         ON Companies.name == Employees.company
-    //     //     WHERE Companies.city == "City 2"
-    //     // )
-    //
-    //     let db = setup_simple_company_employee_scenario();
-    //
-    //     let result = db.query(
-    //         Query::Project(
-    //             vec![QueryField::new("name".to_owned())],
-    //             Box::new(Query::Table(
-    //                 "Companies".to_owned()
-    //             ))
-    //         )
-    //     ).unwrap();
-    // }
+    #[test]
+    fn test_join_filter() {
+        // Find out names of all people working for companies in "City 2"
+        //
+        // SELECT Employees.name
+        // FROM (
+        //     SELECT Employees.name, Companies.city
+        //     FROM Employees
+        //     JOIN Companies
+        //         ON Companies.name == Employees.company
+        //     WHERE Companies.city == "City 2"
+        // )
+
+        let db = setup_simple_company_employee_scenario();
+
+        let joined = Query::JoinOn(
+            query::Condition::FunctionCall(
+                FunctionCall::new("strict_eq".to_owned(), vec![
+                    Argument::QueryField(QueryField::new("name".to_owned()).from_table("Companies".to_owned())),
+                    Argument::QueryField(QueryField::new("company".to_owned()).from_table("Employees".to_owned())),
+                ])
+            ),
+            Box::new(Query::Table("Companies".to_owned())),
+            Box::new(Query::Table("Employees".to_owned()))
+        );
+
+        let result = db.query(
+            Query::Project(
+                vec![QueryField::new("name".to_owned()).from_table("Employees".to_owned())],
+                Box::new(Query::Filter(
+                    query::Condition::FunctionCall(
+                        FunctionCall::new("strict_eq".to_owned(), vec![
+                            Argument::QueryField(QueryField::new("city".to_owned()).from_table("Companies".to_owned())),
+                            Argument::Value(Value::Text("City 2".to_string())),
+                        ])
+                    ),
+                    Box::new(Query::Filter(
+                        query::Condition::FunctionCall(
+                            FunctionCall::new("strict_eq".to_owned(), vec![
+                                Argument::QueryField(QueryField::new("name".to_owned()).from_table("Companies".to_owned())),
+                                Argument::QueryField(QueryField::new("company".to_owned()).from_table("Employees".to_owned())),
+                            ])
+                        ),
+                        Box::new(joined)
+                    ))
+                ))
+            )
+        ).unwrap();
+
+        assert_eq!(result.field_names(), vec!["name"]);
+        assert_eq!(result.rows().len(), 50);
+
+        for row in result.rows() {
+            assert_eq!(row.values().len(), 1);
+            match row.values()[0].clone(
+
+            ) {
+                Value::Text(v) => v.starts_with("Employee "),
+                v => panic!("Incorrect value type (expected Value::Text(_), found {:?})", v)
+            };
+        }
+    }
 }

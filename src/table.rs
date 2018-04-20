@@ -81,4 +81,9 @@ impl Row {
     pub fn values(&self) -> Vec<Value> {
         self.values.clone()
     }
+    pub fn concat(&self, other: Row) -> Row {
+        let mut values = self.values.clone();
+        values.extend(other.values);
+        Row::new(values)
+    }
 }

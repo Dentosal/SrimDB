@@ -41,11 +41,14 @@ pub enum Query {
     /// Pick fields $0 in $1
     Project(Vec<QueryField>, Box<Query>),
 
-    /// Select (filter) the result set of query
-    Select(Condition, Box<Query>),
+    /// Filter the result set of query
+    Filter(Condition, Box<Query>),
 
     /// Rename $0 to $1 in $2
     Rename(QueryField, FieldName, Box<Query>),
+
+    /// Select all rows
+    JoinOn(Condition, Box<Query>, Box<Query>),
 }
 impl Query {
     pub(crate) fn execute(&self, db: &DataDB) -> Result<QueryResult, QueryError> {
@@ -85,13 +88,19 @@ impl Query {
             Project(fields, subquery) => {
                 subquery.execute(&db)?.project(fields)
             },
-            Select(condition, subquery) => {
+            Filter(condition, subquery) => {
                 let fd = db.function_dict();
                 subquery.execute(&db)?.filter(&fd, condition)
             },
             Rename(from, to, subquery) => {
                 subquery.execute(&db)?.rename(from, to)
             },
+            JoinOn(condition, q1, q2) => {
+                let fd = db.function_dict();
+                let v1 = q1.execute(&db)?;
+                let v2 = q2.execute(&db)?;
+                v1.join_on(&fd, &v2, condition)
+            }
         }
     }
 }
@@ -270,7 +279,6 @@ impl QueryResult {
     }
 
     pub fn filter(&self, function_dict: &HashMap<FunctionName, Function>, condition: &Condition) -> Result<QueryResult, QueryError> {
-
         let mut rows: Vec<Row> = Vec::new();
         for row in self.rows.clone() {
             let ok = condition.test(function_dict, &|qf: &QueryField| {
@@ -311,5 +319,22 @@ impl QueryResult {
             fields,
             rows: self.rows.clone(),
         })
+    }
+
+    pub fn join_on(&self, function_dict: &HashMap<FunctionName, Function>, other: &QueryResult, condition: &Condition) -> Result<QueryResult, QueryError> {
+        let mut fields = self.fields.clone();
+        fields.extend(other.fields.clone());
+
+        let mut rows = Vec::new();
+        for row1 in self.rows.clone() {
+            for row2 in other.rows.clone() {
+                rows.push(row1.concat(row2));
+            }
+        }
+
+        (QueryResult {
+            fields,
+            rows
+        }).filter(function_dict, condition)
     }
 }
